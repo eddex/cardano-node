@@ -93,5 +93,9 @@
             drv = packages."cardano-node-${env}";
             exePath = "/bin/cardano-node-entrypoint";
           }));
-      }));
+        })) // {
+          nixosModules = {
+            cardano-node = { imports = [ ./nix/nixos/cardano-node-service.nix ]; };
+          };
+        };
 }
