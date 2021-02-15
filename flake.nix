@@ -86,7 +86,7 @@
             in lib.nameValuePair "cardano-node-${env}-debug" closure);
         in debug // vanilla;
       in {
-        inherit environments evaluated legacyPackages packages;
+        inherit iohkNix environments evaluated legacyPackages packages;
 
         apps = eachEnv (env:
           lib.nameValuePair "cardano-node-${env}" (utils.lib.mkApp {
