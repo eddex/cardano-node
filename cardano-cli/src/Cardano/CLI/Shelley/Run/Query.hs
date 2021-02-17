@@ -47,15 +47,16 @@ import           Cardano.CLI.Types
 import           Cardano.Binary (decodeFull)
 import           Cardano.Crypto.Hash (hashToBytesAsHex)
 
-import qualified Cardano.Ledger.Crypto as Crypto
-import qualified Cardano.Ledger.Shelley.Constraints as Ledger
 import           Ouroboros.Consensus.Cardano.Block as Consensus (EraMismatch (..))
 import           Ouroboros.Consensus.Shelley.Protocol (StandardCrypto)
 import           Ouroboros.Network.Block (Serialised (..))
 import           Ouroboros.Network.Protocol.LocalStateQuery.Type as LocalStateQuery
-                   (AcquireFailure (..))
+
+import qualified Cardano.Ledger.Crypto as Crypto
+import qualified Cardano.Ledger.Shelley.Constraints as Ledger
 import qualified Shelley.Spec.Ledger.API.Protocol as Ledger
 import           Shelley.Spec.Ledger.Scripts ()
+
 
 {- HLINT ignore "Reduce duplication" -}
 
@@ -122,10 +123,8 @@ runQueryProtocolParameters anyEra@(AnyCardanoEra era) (AnyConsensusModeParams cM
 
   let localNodeConnInfo = LocalNodeConnectInfo cModeParams network sockPath
 
-  qInMode <- case cardanoEraStyle era of
-               LegacyByronEra -> left ShelleyQueryCmdByronEra
-               ShelleyBasedEra sbe -> return . QueryInEra eraInMode
-                                        $ QueryInShelleyBasedEra sbe QueryProtocolParameters
+  sbe <- getSbe $ cardanoEraStyle era
+  queryInMode <- createPParamsQuery sbe eraInMode
 
   res <- liftIO $ queryNodeLocalState localNodeConnInfo Nothing qInMode
   case res of
@@ -134,10 +133,17 @@ runQueryProtocolParameters anyEra@(AnyCardanoEra era) (AnyConsensusModeParams cM
       case ePparams of
         Left err -> left . ShelleyQueryCmdLocalStateQueryError $ EraMismatchError err
         Right pparams -> writeProtocolParameters mOutFile pparams
+ where
+  createPParamsQuery
+    :: ShelleyBasedEra era
+    -> EraInMode era mode
+    -> ExceptT ShelleyQueryCmdError IO (QueryInMode mode (Either EraMismatch (ProtocolParameters era)))
+  createPParamsQuery sbe e = return . QueryInEra e
+                               $ QueryInShelleyBasedEra sbe QueryProtocolParameters
 
 writeProtocolParameters
   :: Maybe OutputFile
-  -> ProtocolParameters
+  -> ProtocolParameters era
   -> ExceptT ShelleyQueryCmdError IO ()
 writeProtocolParameters mOutFile pparams =
   case mOutFile of
@@ -437,6 +443,7 @@ writeFilteredUTxOs shelleyBasedEra' mOutFile utxo =
           ShelleyBasedEraShelley -> writeUTxo fpath utxo
           ShelleyBasedEraAllegra -> writeUTxo fpath utxo
           ShelleyBasedEraMary -> writeUTxo fpath utxo
+          ShelleyBasedEraAlonzo -> writeUTxo fpath utxo
  where
    writeUTxo fpath utxo' =
      handleIOExceptT (ShelleyQueryCmdWriteFileError . FileIOError fpath)
@@ -453,6 +460,8 @@ printFilteredUTxOs shelleyBasedEra' (UTxO utxo) = do
       mapM_ (printUtxo shelleyBasedEra') $ Map.toList utxo
     ShelleyBasedEraMary    ->
       mapM_ (printUtxo shelleyBasedEra') $ Map.toList utxo
+    ShelleyBasedEraAlonzo  ->
+      mapM_ (printUtxo shelleyBasedEra') $ Map.toList utxo
  where
    title :: Text
    title =
@@ -460,12 +469,12 @@ printFilteredUTxOs shelleyBasedEra' (UTxO utxo) = do
 
 printUtxo
   :: ShelleyBasedEra era
-  -> (TxIn, TxOut era)
+  -> (TxIn era, TxOut era)
   -> IO ()
 printUtxo shelleyBasedEra' txInOutTuple =
   case shelleyBasedEra' of
     ShelleyBasedEraShelley ->
-      let (TxIn (TxId txhash) (TxIx index), TxOut _ value) = txInOutTuple
+      let (TxIn (TxId txhash) (TxIx index) _PlutusTag, TxOut _ value) = txInOutTuple
       in Text.putStrLn $
            mconcat
              [ Text.decodeLatin1 (hashToBytesAsHex txhash)
@@ -474,7 +483,7 @@ printUtxo shelleyBasedEra' txInOutTuple =
              ]
 
     ShelleyBasedEraAllegra ->
-      let (TxIn (TxId txhash) (TxIx index), TxOut _ value) = txInOutTuple
+      let (TxIn (TxId txhash) (TxIx index) _PlutusTag, TxOut _ value) = txInOutTuple
       in Text.putStrLn $
            mconcat
              [ Text.decodeLatin1 (hashToBytesAsHex txhash)
@@ -482,7 +491,15 @@ printUtxo shelleyBasedEra' txInOutTuple =
              , "        " <> printableValue value
              ]
     ShelleyBasedEraMary ->
-      let (TxIn (TxId txhash) (TxIx index), TxOut _ value) = txInOutTuple
+      let (TxIn (TxId txhash) (TxIx index) _PlutusTag, TxOut _ value) = txInOutTuple
+      in Text.putStrLn $
+           mconcat
+             [ Text.decodeLatin1 (hashToBytesAsHex txhash)
+             , textShowN 6 index
+             , "        " <> printableValue value
+             ]
+    ShelleyBasedEraAlonzo ->
+      let (TxIn (TxId txhash) (TxIx index) _PlutusTag, TxOut _ value) = txInOutTuple
       in Text.putStrLn $
            mconcat
              [ Text.decodeLatin1 (hashToBytesAsHex txhash)
@@ -610,3 +627,4 @@ obtainLedgerEraClassConstraints
 obtainLedgerEraClassConstraints ShelleyBasedEraShelley f = f
 obtainLedgerEraClassConstraints ShelleyBasedEraAllegra f = f
 obtainLedgerEraClassConstraints ShelleyBasedEraMary    f = f
+obtainLedgerEraClassConstraints ShelleyBasedEraAlonzo  f = f
