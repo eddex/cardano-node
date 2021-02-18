@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
@@ -38,6 +39,10 @@ import qualified Shelley.Spec.Ledger.EpochBoundary as ShelleyEpoch
 import qualified Shelley.Spec.Ledger.LedgerState as ShelleyLedger
 import           Shelley.Spec.Ledger.PParams (PParamsUpdate)
 import qualified Shelley.Spec.Ledger.Rewards as Shelley
+import           Shelley.Spec.Ledger.TxBody (MIRPot (..))
+
+
+deriving instance Ord MIRPot
 
 -- Orphan instances involved in the JSON output of the API queries.
 -- We will remove/replace these as we provide more API wrapper types
