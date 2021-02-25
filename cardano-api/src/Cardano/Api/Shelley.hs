@@ -87,8 +87,6 @@ module Cardano.Api.Shelley
 
     -- * Protocol parameters
     ProtocolParameters(..),
-    UTxOCostPerByte(..),
-
 
     -- * Scripts
     toShelleyScript,
