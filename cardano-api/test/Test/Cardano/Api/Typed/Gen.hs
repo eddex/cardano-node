@@ -707,7 +707,7 @@ genProtocolParameters _sbe =
     <*> genNat
     <*> genNat
     <*> genNat
-    <*> genLovelace
+    <*> Gen.maybe genLovelace
     <*> genLovelace
     <*> genLovelace
     <*> genLovelace
@@ -716,5 +716,9 @@ genProtocolParameters _sbe =
     <*> genRational
     <*> genRational
     <*> genRational
-    <*> return NoUTxOCostPerByte
+    <*> return Nothing
+    <*> return Nothing
+    <*> return Nothing
+    <*> return Nothing
+    <*> return Nothing
 
