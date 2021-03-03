@@ -15,7 +15,6 @@
           haskellNix = haskell-nix.legacyPackages.${system};
           gitrev = self.rev or "dirty";
         };
-
         lib = nixpkgs.lib;
         sources = import ./nix/sources.nix { pkgs = legacyPackages; };
         iohkNix = import sources.iohk-nix { inherit system; };
@@ -30,12 +29,12 @@
         config = env:
           { pkgs, ... }: {
             services.cardano-node = rec {
+              stateDir = "/persist";
+              socketPath = "/alloc/node.socket";
               enable = true;
               package = pkgs.cardano-node;
               environment = env;
               cardanoNodePkgs = pkgs;
-              stateDir = "/persist";
-              socketPath = "/alloc/node.socket";
               hostAddr = "0.0.0.0";
               port = 3001;
             };
@@ -94,6 +93,7 @@
             exePath = "/bin/cardano-node-entrypoint";
           }));
         })) // {
+          overlay = import ./overlay.nix self;
           nixosModules = {
             cardano-node = { imports = [ ./nix/nixos/cardano-node-service.nix ]; };
           };
