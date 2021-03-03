@@ -11,13 +11,13 @@
     (utils.lib.eachSystem [ "x86_64-linux" "x86_64-darwin" ] (system:
       let
         legacyPackages = import ./nix {
-          inherit system;
-          ownHaskellNix = haskell-nix.legacyPackages.${system};
+          inherit sources system nixpkgs iohkNix;
+          haskellNix = haskell-nix.legacyPackages.${system};
           gitrev = self.rev or "dirty";
         };
 
         lib = nixpkgs.lib;
-        sources = import ./nix/sources.nix { };
+        sources = import ./nix/sources.nix { pkgs = legacyPackages; };
         iohkNix = import sources.iohk-nix { inherit system; };
         environments = iohkNix.cardanoLib.environments;
         environmentName = "testnet";
