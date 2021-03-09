@@ -106,8 +106,7 @@ let
          ${if genesis.single_shot
            then
              ''
-             echo "Single-shot genesis not supported yet."
-             exit 1
+             ${shelleyGenesisSingleshot           "$genesis_cache_path"}
              ''
            else if genesis.utxo > 0
                    || genesis.delegators > composition.n_pools
@@ -154,15 +153,27 @@ let
     dir:
     ''
     cli genesis create --genesis-dir ${dir}/ ${toString cli_args.createSpec}
+    jq --argjson prof "" .)" \
+       --argjson comp "$composition" '
+      include "profile-genesis" { search: "bench" };
+
+      . * genesis_protocol_params($prof; $comp)
+      '    ${dir}/genesis.spec.json |
+    sponge ${dir}/genesis.spec.json
     '';
 
   shelleyGenesisVerbatim =
     dir:
     ''
-    jq -r --argjson genesisVerb '${__toJSON genesis.verbatim}' \
-           '. * $genesisVerb' \
-           ${dir}/genesis.spec.json |
+    jq -r --argjson genesisVerb '${__toJSON genesis.verbatim}' '
+        . * $genesisVerb
+        '  ${dir}/genesis.spec.json |
     sponge ${dir}/genesis.spec.json
+    '';
+
+  shelleyGenesisSingleshot =
+    dir:
+    ''
     '';
 
   shelleyGenesisIncremental =
