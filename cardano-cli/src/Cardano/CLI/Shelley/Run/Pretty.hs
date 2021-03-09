@@ -1,107 +1,156 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Cardano.CLI.Shelley.Run.Pretty (prettyTx) where
+-- | User-friendly pretty-printing for textual user interfaces (TUI)
+module Cardano.CLI.Shelley.Run.Pretty (friendlyTxBodyLbs) where
 
-import           Cardano.Api
-                   (ShelleyBasedEra (ShelleyBasedEraAllegra, ShelleyBasedEraMary, ShelleyBasedEraShelley))
+import           Cardano.Api as Api
+                   (ShelleyBasedEra (ShelleyBasedEraAllegra, ShelleyBasedEraMary, ShelleyBasedEraShelley),
+                   TxBody)
 import           Cardano.Api.Byron (TxBody (ByronTxBody))
 import           Cardano.Api.Shelley (TxBody (ShelleyTxBody))
+import           Cardano.Binary (Annotated)
 import           Cardano.CLI.Helpers (textShow)
+import qualified Cardano.Chain.UTxO as Byron
+import           Cardano.Ledger.Shelley (ShelleyEra)
+import           Cardano.Ledger.ShelleyMA (MaryOrAllegra (Allegra, Mary), ShelleyMAEra)
 import qualified Cardano.Ledger.ShelleyMA.TxBody as ShelleyMA
 import           Cardano.Prelude
-import           Data.Aeson as JSON (Value, object, (.=))
+import           Data.Aeson as JSON (Object, Value (..), object, toJSON, (.=))
 import           Data.Aeson.Encode.Pretty (Config (confCompare), defConfig, encodePretty')
+import qualified Data.HashMap.Strict as HashMap
+import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
+import           Shelley.Spec.Ledger.API (TxOut)
 import qualified Shelley.Spec.Ledger.API as Shelley
 
-prettyTx :: TxBody era -> LByteString
-prettyTx body0 =
-  encodePretty' defConfig{confCompare = compare} $
-  object $
-  case body0 of
-    ByronTxBody tx -> ["era" .= ("Byron" :: Text), "tx" .= tx]
-    ShelleyTxBody ShelleyBasedEraShelley body aux ->
-      [ "era" .= ("Shelley" :: Text)
-      , "inputs" .= _inputs
-      , "outputs" .= _outputs
-      , "certificates" .= fmap textShow _certs
-      , "withdrawals" .= withdrawals
-      , "fee" .= _txfee
-      , "timetolive" .= _ttl
-      , "update" .= fmap textShow _txUpdate
-      , "metadata_hash" .= fmap textShow _mdHash
-      , "auxiliary_data" .= fmap textShow aux
-      ]
-      where
-        Shelley.TxBody
-          { _inputs
-          , _outputs
-          , _certs
-          , _wdrls
-          , _txfee
-          , _ttl
-          , _txUpdate
-          , _mdHash
-          } =
-            body
-        Shelley.Wdrl withdrawals = _wdrls
-    ShelleyTxBody ShelleyBasedEraAllegra body aux ->
-      [ "era" .= ("Allegra" :: Text)
-      , "inputs" .= inputs
-      , "outputs" .= outputs
-      , "certificates" .= fmap textShow certificates
-      , "withdrawals" .= withdrawals
-      , "fee" .= txfee
-      , "validity_interval" .= prettyValidityInterval validity
-      , "update" .= fmap textShow update
-      , "auxiliary_data_hash" .= fmap textShow adHash
-      , "mint" .= mint
-      , "auxiliary_data" .= fmap textShow aux
-      ]
-      where
-        ShelleyMA.TxBody
-          inputs
-          outputs
-          certificates
-          (Shelley.Wdrl withdrawals)
-          txfee
-          validity
-          update
-          adHash
-          mint =
-            body
-    ShelleyTxBody ShelleyBasedEraMary body aux ->
-      [ "era" .= ("Mary" :: Text)
-      , "inputs" .= inputs
-      , "outputs" .= outputs
-      , "certificates" .= fmap textShow certificates
-      , "withdrawals" .= withdrawals
-      , "fee" .= txfee
-      , "validity_interval" .= prettyValidityInterval validity
-      , "update" .= fmap textShow update
-      , "auxiliary_data_hash" .= fmap textShow adHash
-      , "mint" .= mint
-      , "auxiliary_data" .= fmap textShow aux
-      ]
-      where
-        ShelleyMA.TxBody
-          inputs
-          outputs
-          certificates
-          (Shelley.Wdrl withdrawals)
-          txfee
-          validity
-          update
-          adHash
-          mint =
-            body
+friendlyTxBodyLbs :: Api.TxBody era -> LByteString
+friendlyTxBodyLbs =
+  encodePretty' defConfig{confCompare = compare} . friendlyTxBody
 
-prettyValidityInterval :: ShelleyMA.ValidityInterval -> JSON.Value
-prettyValidityInterval
+friendlyTxBody :: Api.TxBody era -> Value
+friendlyTxBody = \case
+  ByronTxBody tx ->
+    _Object (HashMap.insert "era" "Byron") $ friendlyTxBodyByron tx
+  ShelleyTxBody ShelleyBasedEraShelley body aux ->
+    _Object
+      ( HashMap.insert "era" "Shelley"
+      . HashMap.insert "auxiliary_data" (toJSON $ textShow aux)
+      ) $
+    friendlyTxBodyShelley body
+  ShelleyTxBody ShelleyBasedEraAllegra body aux ->
+    _Object
+      ( HashMap.insert "era" "Allegra"
+      . HashMap.insert "auxiliary_data" (toJSON $ textShow aux)
+      ) $
+    friendlyTxBodyAllegra body
+  ShelleyTxBody ShelleyBasedEraMary body aux ->
+    _Object
+      ( HashMap.insert "era" "Mary"
+      . HashMap.insert "auxiliary_data" (toJSON $ textShow aux)
+      ) $
+    friendlyTxBodyMary body
+
+friendlyTxBodyByron :: Annotated Byron.Tx ByteString -> Value
+friendlyTxBodyByron = toJSON
+
+friendlyTxBodyShelley :: Shelley.TxBody (ShelleyEra StandardCrypto) -> Value
+friendlyTxBodyShelley
+  Shelley.TxBody
+    { _inputs
+    , _outputs
+    , _certs
+    , _wdrls = Shelley.Wdrl withdrawals
+    , _txfee
+    , _ttl
+    , _txUpdate
+    , _mdHash
+    } =
+  object
+    [ "inputs" .= _inputs
+    , "outputs" .= fmap friendlyTxOutShelley _outputs
+    , "certificates" .= fmap textShow _certs
+    , "withdrawals" .= withdrawals
+    , "fee" .= _txfee
+    , "timetolive" .= _ttl
+    , "update" .= fmap textShow _txUpdate
+    , "metadata_hash" .= fmap textShow _mdHash
+    ]
+
+friendlyTxBodyAllegra
+  :: ShelleyMA.TxBody (ShelleyMAEra 'Allegra StandardCrypto) -> Value
+friendlyTxBodyAllegra
+  (ShelleyMA.TxBody
+    inputs
+    outputs
+    certificates
+    (Shelley.Wdrl withdrawals)
+    txfee
+    validity
+    update
+    adHash
+    mint) =
+  object
+    [ "inputs" .= inputs
+    , "outputs" .= fmap friendlyTxOutAllegra outputs
+    , "certificates" .= fmap textShow certificates
+    , "withdrawals" .= withdrawals
+    , "fee" .= txfee
+    , "validity_interval" .= friendlyValidityInterval validity
+    , "update" .= fmap textShow update
+    , "auxiliary_data_hash" .= fmap textShow adHash
+    , "mint" .= mint
+    ]
+
+friendlyTxBodyMary
+  :: ShelleyMA.TxBody (ShelleyMAEra 'Mary StandardCrypto) -> Value
+friendlyTxBodyMary
+  (ShelleyMA.TxBody
+    inputs
+    outputs
+    certificates
+    (Shelley.Wdrl withdrawals)
+    txfee
+    validity
+    update
+    adHash
+    mint) =
+  object
+    [ "inputs" .= inputs
+    , "outputs" .= fmap friendlyTxOutMary outputs
+    , "certificates" .= fmap textShow certificates
+    , "withdrawals" .= withdrawals
+    , "fee" .= txfee
+    , "validity_interval" .= friendlyValidityInterval validity
+    , "update" .= fmap textShow update
+    , "auxiliary_data_hash" .= fmap textShow adHash
+    , "mint" .= mint
+    ]
+
+friendlyValidityInterval :: ShelleyMA.ValidityInterval -> Value
+friendlyValidityInterval
   ShelleyMA.ValidityInterval{invalidBefore, invalidHereafter} =
     object
       [ "invalid_before" .= invalidBefore
       , "invalid_hereafter" .= invalidHereafter
       ]
+
+friendlyTxOutShelley :: TxOut (ShelleyEra StandardCrypto) -> Value
+friendlyTxOutShelley = toJSON
+
+friendlyTxOutAllegra :: TxOut (ShelleyMAEra 'Allegra StandardCrypto) -> Value
+friendlyTxOutAllegra = toJSON
+
+friendlyTxOutMary :: TxOut (ShelleyMAEra 'Mary StandardCrypto) -> Value
+friendlyTxOutMary = toJSON
+
+-- | Lens-ish modifier for a JSON.Object
+_Object :: (JSON.Object -> JSON.Object) -> JSON.Value -> JSON.Value
+_Object f = \case
+  Object a -> Object $ f a
+  v -> v
