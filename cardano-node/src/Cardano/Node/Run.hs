@@ -267,11 +267,12 @@ handleSimpleNode p trace nodeTracers nc onKernel = do
      StdRunNodeArgs
        { srnBfcMaxConcurrencyBulkSync = unMaxConcurrencyBulkSync <$> ncMaxConcurrencyBulkSync nc
        , srnBfcMaxConcurrencyDeadline = unMaxConcurrencyDeadline <$> ncMaxConcurrencyDeadline nc
-       , srcChainDbValidateOverride   = ncValidateDB nc
+       , srnChainDbValidateOverride   = ncValidateDB nc
        , srnDatabasePath              = dbPath
        , srnDiffusionArguments        = diffusionArguments
        , srnDiffusionTracers          = diffusionTracers
        , srnTraceChainDB              = chainDBTracer nodeTracers
+       , srnEnableInDevelopmentVersions = False
        }
  where
   createDiffusionTracers :: Tracers RemoteConnectionId LocalConnectionId blk
