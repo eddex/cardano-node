@@ -67,6 +67,8 @@ let
   shelleyGenesis =
     p: ## profile
     ''
+    ## Determine the genesis cache entry:
+
     genesis_cache_params=$(jq '.genesis * .composition |
                               del(.active_slots_coeff) |
                               del(.epoch_length) |
@@ -86,6 +88,8 @@ let
        '"k\(.composition.n_pools)-d\(.composition.dense_pool_density)-\(.genesis.delegators / 1000)kD-\(.genesis.utxo / 1000)kU-\($params_hash)"
        ' --arg params_hash "$genesis_params_hash" --raw-output)
     genesis_cache_path="${genesisCacheDir}/$genesis_cache_id"
+
+    ## Handle genesis cache hit/miss:
 
     if test -f "$genesis_cache_path"/genesis.json
     then genesis_cache_hit=t; genesis_cache_hit_desc='hit'
@@ -117,8 +121,17 @@ let
          cat <<<$genesis_cache_id     > "$genesis_cache_path"/cache.params.id
     fi
 
+    ## Switch to the genesis cache entry:
+
     rm -f                                     ${stateDir}/shelley
     ln -s "$(realpath "$genesis_cache_path")" ${stateDir}/shelley
+
+    ## Update start time:
+
+    start_time=$(date --iso-8601=s --date="now + ${genesis.genesis_future_offset}" --utc | cut -c-19)
+    jq '. // { systemStart: "''${start_time}Z" }
+       ' ${stateDir}/shelley/genesis.json |
+    sponge ${stateDir}/genesis.json
     '';
 
   shelleyGenesisSpec =
