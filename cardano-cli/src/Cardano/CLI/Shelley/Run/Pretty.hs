@@ -26,7 +26,7 @@ import           Data.Aeson as JSON (Object, Value (..), object, toJSON, (.=))
 import           Data.Aeson.Encode.Pretty (Config (confCompare), defConfig, encodePretty')
 import qualified Data.HashMap.Strict as HashMap
 import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
-import           Shelley.Spec.Ledger.API (TxOut)
+import           Shelley.Spec.Ledger.API (Addr (..), TxOut (TxOut))
 import qualified Shelley.Spec.Ledger.API as Shelley
 
 friendlyTxBodyLbs :: Api.TxBody era -> LByteString
@@ -38,28 +38,25 @@ friendlyTxBody = \case
   ByronTxBody tx ->
     _Object (HashMap.insert "era" "Byron") $ friendlyTxBodyByron tx
   ShelleyTxBody ShelleyBasedEraShelley body aux ->
-    _Object
-      ( HashMap.insert "era" "Shelley"
-      . HashMap.insert "auxiliary_data" (toJSON $ textShow aux)
-      ) $
+    Object $
+    HashMap.insert "era" "Shelley" $
+    HashMap.insert "auxiliary_data" (toJSON $ textShow aux) $
     friendlyTxBodyShelley body
   ShelleyTxBody ShelleyBasedEraAllegra body aux ->
-    _Object
-      ( HashMap.insert "era" "Allegra"
-      . HashMap.insert "auxiliary_data" (toJSON $ textShow aux)
-      ) $
+    Object $
+    HashMap.insert "era" "Allegra" $
+    HashMap.insert "auxiliary_data" (toJSON $ textShow aux) $
     friendlyTxBodyAllegra body
   ShelleyTxBody ShelleyBasedEraMary body aux ->
-    _Object
-      ( HashMap.insert "era" "Mary"
-      . HashMap.insert "auxiliary_data" (toJSON $ textShow aux)
-      ) $
+    Object $
+    HashMap.insert "era" "Mary" $
+    HashMap.insert "auxiliary_data" (toJSON $ textShow aux) $
     friendlyTxBodyMary body
 
 friendlyTxBodyByron :: Annotated Byron.Tx ByteString -> Value
 friendlyTxBodyByron = toJSON
 
-friendlyTxBodyShelley :: Shelley.TxBody (ShelleyEra StandardCrypto) -> Value
+friendlyTxBodyShelley :: Shelley.TxBody (ShelleyEra StandardCrypto) -> Object
 friendlyTxBodyShelley
   Shelley.TxBody
     { _inputs
@@ -71,7 +68,7 @@ friendlyTxBodyShelley
     , _txUpdate
     , _mdHash
     } =
-  object
+  HashMap.fromList
     [ "inputs" .= _inputs
     , "outputs" .= fmap friendlyTxOutShelley _outputs
     , "certificates" .= fmap textShow _certs
@@ -83,7 +80,7 @@ friendlyTxBodyShelley
     ]
 
 friendlyTxBodyAllegra
-  :: ShelleyMA.TxBody (ShelleyMAEra 'Allegra StandardCrypto) -> Value
+  :: ShelleyMA.TxBody (ShelleyMAEra 'Allegra StandardCrypto) -> Object
 friendlyTxBodyAllegra
   (ShelleyMA.TxBody
     inputs
@@ -95,7 +92,7 @@ friendlyTxBodyAllegra
     update
     adHash
     mint) =
-  object
+  HashMap.fromList
     [ "inputs" .= inputs
     , "outputs" .= fmap friendlyTxOutAllegra outputs
     , "certificates" .= fmap textShow certificates
@@ -108,7 +105,7 @@ friendlyTxBodyAllegra
     ]
 
 friendlyTxBodyMary
-  :: ShelleyMA.TxBody (ShelleyMAEra 'Mary StandardCrypto) -> Value
+  :: ShelleyMA.TxBody (ShelleyMAEra 'Mary StandardCrypto) -> Object
 friendlyTxBodyMary
   (ShelleyMA.TxBody
     inputs
@@ -120,7 +117,7 @@ friendlyTxBodyMary
     update
     adHash
     mint) =
-  object
+  HashMap.fromList
     [ "inputs" .= inputs
     , "outputs" .= fmap friendlyTxOutMary outputs
     , "certificates" .= fmap textShow certificates
@@ -141,7 +138,21 @@ friendlyValidityInterval
       ]
 
 friendlyTxOutShelley :: TxOut (ShelleyEra StandardCrypto) -> Value
-friendlyTxOutShelley = toJSON
+friendlyTxOutShelley (TxOut address amount) =
+  Object $ HashMap.insert "amount" (toJSON amount) $ friendlyAddress address
+
+friendlyAddress :: Addr crypto -> Object
+friendlyAddress = HashMap.fromList . \case
+  Addr net cred ref ->
+    [ ( "address"
+      , object
+          [ "network" .= net
+          , "credential" .= cred
+          , "stake reference" .= textShow ref
+          ]
+      )
+    ]
+  AddrBootstrap x -> [("bootstrap address", String $ textShow x)]
 
 friendlyTxOutAllegra :: TxOut (ShelleyMAEra 'Allegra StandardCrypto) -> Value
 friendlyTxOutAllegra = toJSON
