@@ -31,8 +31,7 @@ import qualified Data.Text.IO as Text
 import qualified Data.Vector as Vector
 import           Numeric (showEFloat)
 
-import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT, hoistMaybe, left,
-                   newExceptT)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT, hoistMaybe, left)
 
 import           Cardano.Api
 import           Cardano.Api.Byron
@@ -114,55 +113,36 @@ runQueryProtocolParameters
 runQueryProtocolParameters (AnyConsensusModeParams cModeParams) network mOutFile = do
   SocketPath sockPath <- firstExceptT ShelleyQueryCmdEnvVarSocketErr
                            readEnvSocketPath
-
   let localNodeConnInfo = LocalNodeConnectInfo cModeParams network sockPath
+  point <- chainTipToChainPoint <$> liftIO (getLocalChainTip localNodeConnInfo)
 
-  tip <- liftIO $ getLocalChainTip localNodeConnInfo
-  let point = chainTipToChainPoint tip
+  anyE@(AnyCardanoEra era) <- determineEra cModeParams localNodeConnInfo point
+  let cMode = consensusModeOnly cModeParams
+  sbe <- getSbe $ cardanoEraStyle era
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
-      let anyEra = AnyCardanoEra ShelleyEra
-      eraInMode <- calcEraInMode anyEra ShelleyEra ShelleyMode
-
-      let qInMode = QueryInEra eraInMode
-                      $ QueryInShelleyBasedEra ShelleyBasedEraShelley QueryProtocolParameters
-
-      finalRes <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult finalRes $ writeProtocolParameters mOutFile
-
-    CardanoMode -> do
-      eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
-                     $ QueryCurrentEra CardanoModeIsMultiEra
-
-      anyEra@(AnyCardanoEra era) <-
-        case eraQ of
-          Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
-          Right anyCarEra -> return anyCarEra
-
-      eraInMode <- calcEraInMode anyEra era CardanoMode
-
-      qInMode <- case cardanoEraStyle era of
-                   LegacyByronEra -> left ShelleyQueryCmdByronEra
-                   ShelleyBasedEra sbe -> return . QueryInEra eraInMode
-                                            $ QueryInShelleyBasedEra sbe QueryProtocolParameters
-
-
-      finalRes <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult finalRes $ writeProtocolParameters mOutFile
-
-
-writeProtocolParameters
-  :: Maybe OutputFile
-  -> ProtocolParameters
-  -> ExceptT ShelleyQueryCmdError IO ()
-writeProtocolParameters mOutFile pparams =
-  case mOutFile of
-    Nothing -> liftIO $ LBS.putStrLn (encodePretty pparams)
-    Just (OutputFile fpath) ->
-      handleIOExceptT (ShelleyQueryCmdWriteFileError . FileIOError fpath) $
-        LBS.writeFile fpath (encodePretty pparams)
+  case toEraInMode era cMode of
+    Just eInMode -> do
+      let query = QueryInEra eInMode
+                    $ QueryInShelleyBasedEra sbe QueryProtocolParameters
+      executeQuery
+        era
+        cModeParams
+        localNodeConnInfo
+        point
+        query
+        $ writeProtocolParameters mOutFile
+    Nothing -> left . ShelleyQueryCmdEraConsensusModeMismatch anyE $ AnyConsensusMode cMode
+ where
+  writeProtocolParameters
+    :: Maybe OutputFile
+    -> ProtocolParameters
+    -> ExceptT ShelleyQueryCmdError IO ()
+  writeProtocolParameters mOutFile' pparams =
+    case mOutFile' of
+      Nothing -> liftIO $ LBS.putStrLn (encodePretty pparams)
+      Just (OutputFile fpath) ->
+        handleIOExceptT (ShelleyQueryCmdWriteFileError . FileIOError fpath) $
+          LBS.writeFile fpath (encodePretty pparams)
 
 runQueryTip
   :: AnyConsensusModeParams
@@ -177,31 +157,12 @@ runQueryTip (AnyConsensusModeParams cModeParams) network mOutFile = do
   let consensusMode = consensusModeOnly cModeParams
       point = chainTipToChainPoint tip
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
-      mEpoch <- mEpochQuery (AnyCardanoEra ShelleyEra)
-                            consensusMode tip localNodeConnInfo
-
-      let output = encodePretty . toObject mEpoch $ toJSON tip
-
-      case mOutFile of
-        Just (OutputFile fpath) -> liftIO $ LBS.writeFile fpath output
-        Nothing                 -> liftIO $ LBS.putStrLn        output
-
-    CardanoMode -> do
-      anyEra <- firstExceptT ShelleyQueryCmdAcquireFailure
-                  . newExceptT
-                  . queryNodeLocalState localNodeConnInfo (Just point)
-                    $ QueryCurrentEra CardanoModeIsMultiEra
-
-      mEpoch <- mEpochQuery anyEra consensusMode tip localNodeConnInfo
-
-      let output = encodePretty . toObject mEpoch $ toJSON tip
-
-      case mOutFile of
-        Just (OutputFile fpath) -> liftIO $ LBS.writeFile fpath output
-        Nothing                 -> liftIO $ LBS.putStrLn        output
+  anyEra <- determineEra cModeParams localNodeConnInfo point
+  mEpoch <- mEpochQuery anyEra consensusMode tip localNodeConnInfo
+  let output = encodePretty . toObject mEpoch $ toJSON tip
+  case mOutFile of
+    Just (OutputFile fpath) -> liftIO $ LBS.writeFile fpath output
+    Nothing                 -> liftIO $ LBS.putStrLn        output
  where
    mEpochQuery
      :: AnyCardanoEra
@@ -249,29 +210,21 @@ runQueryUTxO (AnyConsensusModeParams cModeParams)
   let localNodeConnInfo = LocalNodeConnectInfo cModeParams network sockPath
 
   point <- chainTipToChainPoint <$> liftIO (getLocalChainTip localNodeConnInfo)
+  anyE@(AnyCardanoEra era) <- determineEra cModeParams localNodeConnInfo point
+  let cMode = consensusModeOnly cModeParams
+  sbe <- getSbe $ cardanoEraStyle era
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
-      qInMode <- createQuery ShelleyBasedEraShelley ShelleyEraInShelleyMode
-      eUtxo <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult eUtxo $ writeFilteredUTxOs ShelleyBasedEraShelley mOutFile
-    CardanoMode -> do
-       eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
-                      $ QueryCurrentEra CardanoModeIsMultiEra
-       anyEra@(AnyCardanoEra era) <-
-         case eraQ of
-           Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
-           Right anyCarEra -> return anyCarEra
-
-       eraInMode <- calcEraInMode anyEra era CardanoMode
-
-       sbe <- getSbe $ cardanoEraStyle era
-
-       qInMode <- createQuery sbe eraInMode
-
-       eUtxo <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-       handleQueryResult eUtxo $ writeFilteredUTxOs sbe mOutFile
+  case toEraInMode era cMode of
+    Just eInMode -> do
+      qInMode <- createQuery sbe eInMode
+      executeQuery
+        era
+        cModeParams
+        localNodeConnInfo
+        point
+        qInMode
+        $ writeFilteredUTxOs sbe mOutFile
+    Nothing -> left . ShelleyQueryCmdEraConsensusModeMismatch anyE $ AnyConsensusMode cMode
  where
   createQuery
     :: ShelleyBasedEra era
@@ -296,39 +249,25 @@ runQueryLedgerState (AnyConsensusModeParams cModeParams)
                     network mOutFile = do
   SocketPath sockPath <- firstExceptT ShelleyQueryCmdEnvVarSocketErr readEnvSocketPath
   let localNodeConnInfo = LocalNodeConnectInfo cModeParams network sockPath
-
   point <- chainTipToChainPoint <$> liftIO (getLocalChainTip localNodeConnInfo)
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
-      let qInMode = QueryInEra ShelleyEraInShelleyMode
-                      . QueryInShelleyBasedEra ShelleyBasedEraShelley
-                      $ QueryLedgerState
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult res
-        $ obtainLedgerEraClassConstraints ShelleyBasedEraShelley
-        $ writeLedgerState mOutFile
-    CardanoMode -> do
-      eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
-                     $ QueryCurrentEra CardanoModeIsMultiEra
-      anyEra@(AnyCardanoEra era) <-
-        case eraQ of
-          Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
-          Right anyCarEra -> return anyCarEra
+  anyE@(AnyCardanoEra era) <- determineEra cModeParams localNodeConnInfo point
+  let cMode = consensusModeOnly cModeParams
+  sbe <- getSbe $ cardanoEraStyle era
 
-      eraInMode <- calcEraInMode anyEra era CardanoMode
-
-      sbe <- getSbe $ cardanoEraStyle era
-
-      let qInMode = QueryInEra eraInMode
+  case toEraInMode era cMode of
+    Just eInMode -> do
+      let qInMode = QueryInEra eInMode
                       . QueryInShelleyBasedEra sbe
                       $ QueryLedgerState
-
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult res
-        $ obtainLedgerEraClassConstraints sbe
-        $ writeLedgerState mOutFile
+      executeQuery
+        era
+        cModeParams
+        localNodeConnInfo
+        point
+        qInMode
+        $ obtainLedgerEraClassConstraints sbe (writeLedgerState mOutFile)
+    Nothing -> left . ShelleyQueryCmdEraConsensusModeMismatch anyE $ AnyConsensusMode cMode
 
 
 runQueryProtocolState
@@ -343,33 +282,23 @@ runQueryProtocolState (AnyConsensusModeParams cModeParams)
 
   point <- chainTipToChainPoint <$> liftIO (getLocalChainTip localNodeConnInfo)
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
-      let qInMode = QueryInEra ShelleyEraInShelleyMode
-                      . QueryInShelleyBasedEra ShelleyBasedEraShelley
-                      $ QueryProtocolState
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult res $ writeProtocolState mOutFile
+  anyE@(AnyCardanoEra era) <- determineEra cModeParams localNodeConnInfo point
+  let cMode = consensusModeOnly cModeParams
+  sbe <- getSbe $ cardanoEraStyle era
 
-    CardanoMode -> do
-      eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
-                     $ QueryCurrentEra CardanoModeIsMultiEra
-      anyEra@(AnyCardanoEra era) <-
-        case eraQ of
-          Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
-          Right anyCarEra -> return anyCarEra
-
-      eraInMode <- calcEraInMode anyEra era CardanoMode
-
-      sbe <- getSbe $ cardanoEraStyle era
-
-      let qInMode = QueryInEra eraInMode
+  case toEraInMode era cMode of
+    Just eInMode -> do
+      let qInMode = QueryInEra eInMode
                       . QueryInShelleyBasedEra sbe
                       $ QueryProtocolState
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) qInMode
-      handleQueryResult res $ writeProtocolState mOutFile
-
+      executeQuery
+        era
+        cModeParams
+        localNodeConnInfo
+        point
+        qInMode
+        $ writeProtocolState mOutFile
+    Nothing -> left . ShelleyQueryCmdEraConsensusModeMismatch anyE $ AnyConsensusMode cMode
 
 -- | Query the current delegations and reward accounts, filtered by a given
 -- set of addresses, from a Shelley node via the local state query protocol.
@@ -387,35 +316,25 @@ runQueryStakeAddressInfo (AnyConsensusModeParams cModeParams)
 
   point <- chainTipToChainPoint <$> liftIO (getLocalChainTip localNodeConnInfo)
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
+  anyE@(AnyCardanoEra era) <- determineEra cModeParams localNodeConnInfo point
+  let cMode = consensusModeOnly cModeParams
+  sbe <- getSbe $ cardanoEraStyle era
+
+  case toEraInMode era cMode of
+    Just eInMode -> do
       let stakeAddr = Set.singleton $ fromShelleyStakeCredential addr
-          sQuery = QueryInShelleyBasedEra ShelleyBasedEraShelley
-                               $ QueryStakeAddresses stakeAddr network
-          query = QueryInEra ShelleyEraInShelleyMode sQuery
+          query = QueryInEra eInMode
+                    . QueryInShelleyBasedEra sbe
+                    $ QueryStakeAddresses stakeAddr network
 
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) query
-      handleQueryResult res $ writeStakeAddressInfo mOutFile . DelegationsAndRewards
-
-    CardanoMode -> do
-      eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
-                     $ QueryCurrentEra CardanoModeIsMultiEra
-      anyEra@(AnyCardanoEra era) <-
-        case eraQ of
-          Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
-          Right anyCarEra -> return anyCarEra
-
-      eraInMode <- calcEraInMode anyEra era CardanoMode
-
-      sbe <- getSbe $ cardanoEraStyle era
-      let stakeAddr = Set.singleton $ fromShelleyStakeCredential addr
-          sQuery = QueryInShelleyBasedEra sbe
-                               $ QueryStakeAddresses stakeAddr network
-          query = QueryInEra eraInMode sQuery
-
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) query
-      handleQueryResult res $ writeStakeAddressInfo mOutFile . DelegationsAndRewards
+      executeQuery
+        era
+        cModeParams
+        localNodeConnInfo
+        point
+        query
+        $ writeStakeAddressInfo mOutFile . DelegationsAndRewards
+    Nothing -> left . ShelleyQueryCmdEraConsensusModeMismatch anyE $ AnyConsensusMode cMode
 
 -- -------------------------------------------------------------------------------------------------
 
@@ -582,35 +501,26 @@ runQueryStakeDistribution (AnyConsensusModeParams cModeParams)
                           network mOutFile = do
   SocketPath sockPath <- firstExceptT ShelleyQueryCmdEnvVarSocketErr readEnvSocketPath
   let localNodeConnInfo = LocalNodeConnectInfo cModeParams network sockPath
-
   point <- chainTipToChainPoint <$> liftIO (getLocalChainTip localNodeConnInfo)
 
-  case consensusModeOnly cModeParams of
-    ByronMode -> left ShelleyQueryCmdByronEra
-    ShelleyMode -> do
-      let sQuery = QueryInShelleyBasedEra ShelleyBasedEraShelley
-                    QueryStakeDistribution
-          query = QueryInEra ShelleyEraInShelleyMode  sQuery
+  anyE@(AnyCardanoEra era) <- determineEra cModeParams localNodeConnInfo point
+  let cMode = consensusModeOnly cModeParams
+  sbe <- getSbe $ cardanoEraStyle era
 
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) query
-      handleQueryResult res $ writeStakeDistribution mOutFile
-    CardanoMode -> do
-      eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
-                          $ QueryCurrentEra CardanoModeIsMultiEra
-      anyEra@(AnyCardanoEra era) <-
-        case eraQ of
-          Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
-          Right anyCarEra -> return anyCarEra
+  case toEraInMode era cMode of
+    Just eInMode -> do
+      let query = QueryInEra eInMode
+                    . QueryInShelleyBasedEra sbe
+                    $ QueryStakeDistribution
+      executeQuery
+        era
+        cModeParams
+        localNodeConnInfo
+        point
+        query
+        $ writeStakeDistribution mOutFile
+    Nothing -> left . ShelleyQueryCmdEraConsensusModeMismatch anyE $ AnyConsensusMode cMode
 
-      eraInMode <- calcEraInMode anyEra era CardanoMode
-
-      sbe <- getSbe $ cardanoEraStyle era
-
-      let sQuery = QueryInShelleyBasedEra sbe QueryStakeDistribution
-          query = QueryInEra eraInMode sQuery
-
-      res <- liftIO $ queryNodeLocalState localNodeConnInfo (Just point) query
-      handleQueryResult res $ writeStakeDistribution mOutFile
 
 writeStakeDistribution
   :: Maybe OutputFile
@@ -676,13 +586,63 @@ instance ToJSON DelegationsAndRewards where
 -- Helpers
 
 calcEraInMode
-  :: AnyCardanoEra
-  -> CardanoEra era
+  :: CardanoEra era
   -> ConsensusMode mode
   -> ExceptT ShelleyQueryCmdError IO (EraInMode era mode)
-calcEraInMode anyEra era mode=
-  hoistMaybe (ShelleyQueryCmdEraConsensusModeMismatch anyEra (AnyConsensusMode mode))
+calcEraInMode era mode=
+  hoistMaybe (ShelleyQueryCmdEraConsensusModeMismatch (anyCardanoEra era) (AnyConsensusMode mode))
                    $ toEraInMode era mode
+
+determineEra
+  :: ConsensusModeParams mode
+  -> LocalNodeConnectInfo mode
+  -> ChainPoint
+  -> ExceptT ShelleyQueryCmdError IO AnyCardanoEra
+determineEra cModeParams localNodeConnInfo point =
+  case consensusModeOnly cModeParams of
+    ByronMode -> return $ AnyCardanoEra ByronEra
+    ShelleyMode -> return $ AnyCardanoEra ShelleyEra
+    CardanoMode -> do
+      eraQ <- liftIO . queryNodeLocalState localNodeConnInfo (Just point)
+                     $ QueryCurrentEra CardanoModeIsMultiEra
+      case eraQ of
+        Left acqFail -> left $ ShelleyQueryCmdAcquireFailure acqFail
+        Right anyCarEra -> return anyCarEra
+
+executeQuery
+  :: forall result era mode. CardanoEra era
+  -> ConsensusModeParams mode
+  -> LocalNodeConnectInfo mode
+  -> ChainPoint
+  -> QueryInMode mode (Either EraMismatch result)
+  -> (result -> ExceptT ShelleyQueryCmdError IO ())
+  -- ^ Action to perform on 'result' of 'QueryInMode'
+  -> ExceptT ShelleyQueryCmdError IO ()
+executeQuery era cModeP localNodeConnInfo point q action = do
+  eraInMode <- calcEraInMode era $ consensusModeOnly cModeP
+  case eraInMode of
+    ByronEraInByronMode -> left ShelleyQueryCmdByronEra
+    ShelleyEraInShelleyMode -> do
+      finalRes <- liftIO execQuery
+      handleQueryResult finalRes action
+    ByronEraInCardanoMode ->
+      left ShelleyQueryCmdByronEra
+    ShelleyEraInCardanoMode -> do
+      finalRes <- liftIO execQuery
+      handleQueryResult finalRes action
+    AllegraEraInCardanoMode -> do
+      finalRes <- liftIO execQuery
+      handleQueryResult finalRes action
+    MaryEraInCardanoMode -> do
+      finalRes <- liftIO execQuery
+      handleQueryResult finalRes action
+ where
+   execQuery :: IO (Either AcquireFailure (Either EraMismatch result))
+   execQuery = queryNodeLocalState localNodeConnInfo (Just point) q
+
+getSbe :: CardanoEraStyle era -> ExceptT ShelleyQueryCmdError IO (ShelleyBasedEra era)
+getSbe LegacyByronEra = left ShelleyQueryCmdByronEra
+getSbe (ShelleyBasedEra sbe) = return sbe
 
 handleQueryResult
   :: Either AcquireFailure
@@ -696,10 +656,6 @@ handleQueryResult eAcq action =
       case eResult of
         Left err -> left . ShelleyQueryCmdLocalStateQueryError $ EraMismatchError err
         Right result ->  action result
-
-getSbe :: CardanoEraStyle era -> ExceptT ShelleyQueryCmdError IO (ShelleyBasedEra era)
-getSbe LegacyByronEra = left ShelleyQueryCmdByronEra
-getSbe (ShelleyBasedEra sbe) = return sbe
 
 obtainLedgerEraClassConstraints
   :: ShelleyLedgerEra era ~ ledgerera
