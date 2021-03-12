@@ -8,7 +8,7 @@
 {-# LANGUAGE TypeApplications #-}
 
 -- | User-friendly pretty-printing for textual user interfaces (TUI)
-module Cardano.CLI.Shelley.Run.Pretty (friendlyTxBodyLbs) where
+module Cardano.CLI.Shelley.Run.Pretty (friendlyTxBodyBS) where
 
 import           Cardano.Prelude hiding (undefined)
 import           Prelude (error)
@@ -26,15 +26,15 @@ import           Cardano.Ledger.Shelley as Ledger (ShelleyEra)
 import           Cardano.Ledger.ShelleyMA (MaryOrAllegra (Allegra, Mary), ShelleyMAEra)
 import qualified Cardano.Ledger.ShelleyMA.TxBody as ShelleyMA
 import           Data.Aeson as JSON (Object, Value (..), object, toJSON, (.=))
-import           Data.Aeson.Encode.Pretty (Config (confCompare), defConfig, encodePretty')
 import qualified Data.HashMap.Strict as HashMap
+import           Data.Yaml.Pretty (defConfig, encodePretty, setConfCompare)
 import           Ouroboros.Consensus.Shelley.Protocol.Crypto (StandardCrypto)
 import           Shelley.Spec.Ledger.API (Addr (..), TxOut (TxOut))
 import qualified Shelley.Spec.Ledger.API as Shelley
 
-friendlyTxBodyLbs :: Api.TxBody era -> LByteString
-friendlyTxBodyLbs =
-  encodePretty' defConfig{confCompare = compare} . friendlyTxBody
+friendlyTxBodyBS :: Api.TxBody era -> ByteString
+friendlyTxBodyBS =
+  encodePretty (setConfCompare compare defConfig) . friendlyTxBody
 
 friendlyTxBody :: Api.TxBody era -> Value
 friendlyTxBody = \case

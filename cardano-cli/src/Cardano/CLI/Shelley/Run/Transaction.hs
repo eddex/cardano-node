@@ -47,7 +47,7 @@ import           Cardano.CLI.Shelley.Key (InputDecodeError, readSigningKeyFileAn
 import           Cardano.CLI.Shelley.Parsers
 import           Cardano.CLI.Shelley.Run.Genesis (ShelleyGenesisCmdError (..), readShelleyGenesis,
                    renderShelleyGenesisCmdError)
-import           Cardano.CLI.Shelley.Run.Pretty (friendlyTxBodyLbs)
+import           Cardano.CLI.Shelley.Run.Pretty (friendlyTxBodyBS)
 import           Cardano.CLI.Types
 
 data ShelleyTxCmdError
@@ -792,7 +792,7 @@ runTxView txfile = do
       InputTxFile (TxFile txFile) -> do
         InAnyCardanoEra era tx <- readFileTx txFile
         return . InAnyCardanoEra era $ getTxBody tx
-  liftIO $ LBS.putStrLn $ friendlyTxBodyLbs txbody
+  liftIO $ BS.putStrLn $ friendlyTxBodyBS txbody
 
 runTxCreateWitness
   :: TxBodyFile
